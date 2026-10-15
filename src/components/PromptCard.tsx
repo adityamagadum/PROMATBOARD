@@ -274,7 +274,7 @@ const PromptCard = memo(function PromptCard({
         <div
           onClick={stop}
           onPointerDown={stop}
-          className="absolute top-1.5 right-1.5 flex animate-[fade-in_120ms_ease-out] items-center gap-0.5 rounded-lg bg-s3/90 p-0.5 shadow-[0_0_0_1px_var(--border)] backdrop-blur-sm"
+          className="absolute top-1.5 right-1.5 flex animate-[fade-in_120ms_ease-out] items-center gap-0.5 rounded-lg bg-s3 p-0.5 shadow-[0_0_0_1px_var(--border)]"
         >
           {showInsert && (
             <IconButton size="sm" label="Insert into page" shortcut={`${modKey}+↵`} onClick={() => runPrompt(prompt, 'insert')}>
@@ -404,7 +404,7 @@ export const PromptTile = memo(function PromptTile({
       }}
       onMouseEnter={() => ref.current && schedulePeek(prompt, ref.current)}
       onMouseLeave={hidePeek}
-      className="card group relative flex h-[58px] cursor-pointer flex-col justify-between rounded-xl px-2.5 py-2 [contain-intrinsic-size:auto_58px]"
+      className="card group relative flex h-[58px] cursor-pointer flex-col justify-between rounded-xl px-2.5 py-2"
     >
       <div className="flex items-center gap-1.5 text-[11px] text-subtle">
         {folder?.emoji ? (

@@ -129,7 +129,7 @@ export function Sheet({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="anim-fade fixed inset-0 z-40 bg-[var(--scrim)] backdrop-blur-[2px]" />
+        <Dialog.Overlay className="anim-fade fixed inset-0 z-40 bg-[var(--scrim)]" />
         <Dialog.Content
           onOpenAutoFocus={(e) => {
             if (!initialFocus) return;

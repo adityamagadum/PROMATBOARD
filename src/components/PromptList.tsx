@@ -1,14 +1,15 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { Clock, FolderOpen, Inbox, MousePointerClick, Plus, SearchX, Star, Braces, TextSelect } from 'lucide-react';
-import type { Prompt } from '../types';
+import type { Folder, Prompt, View } from '../types';
 import { useVault } from '../lib/store';
 import { searchPrompts } from '../lib/search';
 import { childrenOf, descendantIds } from '../lib/tree';
 import { listRef, useUI, type Entry } from '../lib/ui';
 import { FOLDER_COLORS, modKey } from '../lib/utils';
 import { DraggablePromptCard, PromptTile, SortablePromptCard } from './PromptCard';
+import { hidePeek } from './Peek';
 import { Button } from './ui';
 
 interface Section {
@@ -33,16 +34,34 @@ const byOrder = (a: Prompt, b: Prompt) => a.order - b.order || a.createdAt - b.c
 const toEntries = (section: string, prompts: Prompt[]): Entry[] =>
   prompts.map((p) => ({ key: `${section}:${p.id}`, prompt: p, section }));
 
+/** Identity of what the list shows; a change is a "page" change (fade + its own scroll position). */
+export const viewKeyOf = (view: View, query: string) =>
+  query.trim() ? 'search' : view.kind === 'folder' ? `folder:${view.id}` : view.kind;
+
+/** Scroll offset and rendered page count per view, so going back lands exactly where you left. */
+const memory = new Map<string, { top: number; limit: number }>();
+
+/**
+ * What the list (and ViewTitle) show. The view switches immediately: rendering a page of
+ * cards is cheap, and deferring it only added latency. Search text is deferred so typing
+ * stays responsive while results render. Title and list share this hook so they change together.
+ */
+export function useShownView() {
+  const view = useUI((s) => s.view);
+  const query = useDeferredValue(useUI((s) => s.query));
+  return { view, query };
+}
+
 export function PromptList() {
   const prompts = useVault((s) => s.prompts);
   const folders = useVault((s) => s.folders);
   const onboardingDismissed = useVault((s) => s.settings.onboardingDismissed);
-  const view = useUI((s) => s.view);
-  const query = useDeferredValue(useUI((s) => s.query));
+  const { view, query } = useShownView();
   const activeKey = useUI((s) => s.activeKey);
   // Layout animations are paused during a drag: dnd-kit already animates the reorder.
   const dragging = useUI((s) => !!s.draggingId);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const viewKey = viewKeyOf(view, query);
 
   const all = useMemo(() => Object.values(prompts), [prompts]);
 
@@ -52,7 +71,6 @@ export function PromptList() {
       return [
         {
           id: 'results',
-          label: `${hits.length} result${hits.length === 1 ? '' : 's'}`,
           layout: 'cards',
           entries: hits.map((h) => ({ key: `r:${h.prompt.id}`, prompt: h.prompt, section: 'results', titleMatches: h.titleMatches })),
         },
@@ -84,10 +102,10 @@ export function PromptList() {
       case 'recent':
         return [
           {
-            id: 'recent',
+            id: 'recent-view',
             layout: 'cards',
             entries: toEntries(
-              'recent',
+              'recent-view',
               all.filter((p) => p.lastUsedAt).sort((a, b) => b.lastUsedAt! - a.lastUsedAt!).slice(0, 50),
             ),
           },
@@ -121,8 +139,12 @@ export function PromptList() {
   const total = entries.length;
 
   // Progressive rendering: mount PAGE rows at a time so 500+ prompts open instantly.
-  const [limit, setLimit] = useState(PAGE);
-  useEffect(() => setLimit(PAGE), [view, query]);
+  // The page count belongs to the view and is picked during render, so a view never
+  // inherits another view's count for a frame.
+  const [paging, setPaging] = useState({ key: viewKey, limit: PAGE });
+  const limit = paging.key === viewKey ? paging.limit : (memory.get(viewKey)?.limit ?? PAGE);
+  const setLimit = (next: number) => setPaging({ key: viewKey, limit: next });
+
   const visibleSections = useMemo(() => {
     let budget = limit;
     return sections.map((s) => {
@@ -138,15 +160,29 @@ export function PromptList() {
   // in case the content is still shorter than the viewport).
   const maybeLoadMore = () => {
     const el = scrollRef.current;
-    if (truncated && el && el.scrollTop + el.clientHeight > el.scrollHeight - 600) setLimit((l) => l + PAGE);
+    if (truncated && el && el.scrollTop + el.clientHeight > el.scrollHeight - 600) setLimit(limit + PAGE);
   };
-  useEffect(maybeLoadMore, [truncated, limit]);
+  useEffect(maybeLoadMore, [truncated, limit, viewKey]);
 
   // Arrowing past the rendered window mounts the next page.
   useEffect(() => {
     const i = entries.findIndex((e) => e.key === activeKey);
     if (i >= limit - 2) setLimit(i + PAGE);
   }, [activeKey, entries, limit]);
+
+  // Each view keeps its own scroll position; every new search starts at the top.
+  const searchKey = viewKey === 'search' ? query : '';
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = viewKey === 'search' ? 0 : (memory.get(viewKey)?.top ?? 0);
+    hidePeek();
+  }, [viewKey, searchKey]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el && viewKey !== 'search') memory.set(viewKey, { top: el.scrollTop, limit });
+    maybeLoadMore();
+  };
 
   useLayoutEffect(() => {
     listRef.entries = entries;
@@ -165,103 +201,138 @@ export function PromptList() {
     document.getElementById(`entry-${activeKey}`)?.scrollIntoView({ block: 'nearest' });
   }, [activeKey, limit]);
 
-  const showFolderFor = (sectionId: string) => !(sectionId === 'folder' || sectionId.startsWith('sub-'));
-  const animate = total <= ANIMATE_LIMIT;
+  // The very first paint shows content immediately; later view changes fade in.
+  const firstRender = useRef(true);
+  useEffect(() => {
+    firstRender.current = false;
+  }, []);
+
+  // Item enter/exit/reorder animations only for edits inside a stable view. Search filters
+  // instantly (animating every keystroke reads as flicker), and long lists skip them.
+  const animateItems = !query.trim() && total <= ANIMATE_LIMIT && !dragging;
   const showOnboarding = view.kind === 'home' && !query && !onboardingDismissed;
 
   return (
-    <div
+    <motion.div
       ref={scrollRef}
+      // Lets layout animations account for this element's scroll offset.
+      layoutScroll
       id="pv-list"
       role="listbox"
       aria-label="Prompts"
       aria-activedescendant={activeKey ? `entry-${activeKey}` : undefined}
-      onScroll={maybeLoadMore}
-      className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-1 pb-4"
+      onScroll={onScroll}
+      className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4"
     >
-      {showOnboarding && <Onboarding />}
+      <motion.div
+        key={viewKey}
+        initial={firstRender.current ? false : { opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.14, ease: 'easeOut' }}
+      >
+        {showOnboarding && <Onboarding />}
 
-      {total === 0 && !showOnboarding && <EmptyState query={query} />}
+        {total === 0 && !showOnboarding && <EmptyState view={view} query={query} />}
 
-      {visibleSections.map((section) =>
-        section.entries.length === 0 ? null : (
-          <section key={section.id} className="mb-3" aria-label={section.label}>
-            {section.label && (
-              <h2 className="section-label sticky top-0 z-[1] -mx-3 mb-1 bg-bg/90 px-4 pt-2 pb-1.5 backdrop-blur-sm">
-                {section.label}
-              </h2>
-            )}
-            {section.layout === 'tiles' ? (
-              <div className="grid grid-cols-2 gap-1.5">
-                {section.entries.map((e) => (
-                  <PromptTile
-                    key={e.key}
-                    entryKey={e.key}
-                    prompt={e.prompt}
-                    folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
-                    active={activeKey === e.key}
-                  />
-                ))}
-                {!!section.more && (
-                  <button
-                    type="button"
-                    onClick={() => useUI.getState().setView({ kind: 'favorites' })}
-                    className="col-span-2 rounded-lg py-1 text-[11.5px] font-medium text-subtle transition-colors hover:bg-s3 hover:text-fg"
-                  >
-                    View all {section.entries.length + section.more} favorites →
-                  </button>
-                )}
-              </div>
-            ) : (
-              <CardStack
-                ids={section.ids}
-                sortable={!!section.sortable}
-              >
-                <AnimatePresence initial={false} mode="popLayout">
-                  {section.entries.map((e) => {
-                    const Card = section.sortable ? SortablePromptCard : DraggablePromptCard;
-                    const card = (
-                      <Card
-                        entryKey={e.key}
-                        prompt={e.prompt}
-                        folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
-                        showFolder={showFolderFor(section.id)}
-                        active={activeKey === e.key}
-                        titleMatches={e.titleMatches}
-                      />
-                    );
-                    return animate ? (
-                      <motion.div
+        {visibleSections.map((section) =>
+          section.entries.length === 0 ? null : (
+            <section key={section.id} className="mb-3" aria-label={section.label}>
+              {section.label && (
+                <h2 className="section-label sticky top-0 z-[2] -mx-3 mb-1 bg-bg px-4 pt-2 pb-1.5">{section.label}</h2>
+              )}
+              {section.layout === 'tiles' ? (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {section.entries.map((e) => (
+                    <PromptTile
+                      key={e.key}
+                      entryKey={e.key}
+                      prompt={e.prompt}
+                      folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
+                      active={activeKey === e.key}
+                    />
+                  ))}
+                  {!!section.more && (
+                    <button
+                      type="button"
+                      onClick={() => useUI.getState().setView({ kind: 'favorites' })}
+                      className="col-span-2 rounded-lg py-1 text-[11.5px] font-medium text-subtle transition-colors hover:bg-s3 hover:text-fg"
+                    >
+                      View all {section.entries.length + section.more} favorites →
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <CardStack ids={section.ids} sortable={!!section.sortable}>
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {section.entries.map((e) => (
+                      <Row
                         key={e.key}
-                        layout={dragging ? false : 'position'}
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.12 } }}
-                        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1], layout: { type: 'spring', stiffness: 520, damping: 40 } }}
-                      >
-                        {card}
-                      </motion.div>
-                    ) : (
-                      <div key={e.key}>{card}</div>
-                    );
-                  })}
-                </AnimatePresence>
-              </CardStack>
-            )}
-          </section>
-        ),
-      )}
-      {truncated && (
-        <div className="flex h-10 items-center justify-center text-[11px] text-subtle">
-          Loading more…
-        </div>
-      )}
-    </div>
+                        entry={e}
+                        sortable={!!section.sortable}
+                        folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
+                        showFolder={!(section.id === 'folder' || section.id.startsWith('sub-'))}
+                        active={activeKey === e.key}
+                        animate={animateItems}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </CardStack>
+              )}
+            </section>
+          ),
+        )}
+        {truncated && <div className="flex h-10 items-center justify-center text-[11px] text-subtle">Loading more…</div>}
+      </motion.div>
+    </motion.div>
   );
 }
 
+interface RowProps {
+  entry: Entry;
+  sortable: boolean;
+  folder?: Folder;
+  showFolder: boolean;
+  active: boolean;
+  animate: boolean;
+}
+
+/**
+ * One list row. Memoized so moving the keyboard cursor re-renders two rows instead of the
+ * whole list (an animated row measures its layout every time it renders).
+ * forwardRef: AnimatePresence's popLayout needs the row's DOM node.
+ */
+const Row = memo(
+  forwardRef<HTMLDivElement, RowProps>(function Row({ entry, sortable, folder, showFolder, active, animate }, ref) {
+    const Card = sortable ? SortablePromptCard : DraggablePromptCard;
+    const card = (
+      <Card
+        entryKey={entry.key}
+        prompt={entry.prompt}
+        folder={folder}
+        showFolder={showFolder}
+        active={active}
+        titleMatches={entry.titleMatches}
+      />
+    );
+    if (!animate) return <div ref={ref}>{card}</div>;
+    return (
+      <motion.div
+        ref={ref}
+        layout="position"
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.12 } }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1], layout: { type: 'spring', stiffness: 520, damping: 40 } }}
+      >
+        {card}
+      </motion.div>
+    );
+  }),
+);
+
 function CardStack({ ids, sortable, children }: { ids: string[]; sortable: boolean; children: React.ReactNode }) {
-  const stack = <div className="flex flex-col gap-1.5">{children}</div>;
+  // `relative`: popLayout positions exiting rows absolutely against this element.
+  const stack = <div className="relative flex flex-col gap-1.5">{children}</div>;
   return sortable ? (
     <SortableContext items={ids} strategy={verticalListSortingStrategy}>
       {stack}
@@ -271,7 +342,12 @@ function CardStack({ ids, sortable, children }: { ids: string[]; sortable: boole
   );
 }
 
+/** The welcome card animates in once per session, not every time Home is shown. */
+let onboardingShown = false;
+
 function Onboarding() {
+  const [animateIn] = useState(() => !onboardingShown);
+  onboardingShown = true;
   const dismiss = () => void useVault.getState().updateSettings({ onboardingDismissed: true });
   const tips = [
     { icon: <MousePointerClick size={14} />, text: 'Click any card to copy it. Hover to peek at the full text.' },
@@ -280,15 +356,15 @@ function Onboarding() {
   ];
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
+      initial={animateIn ? { opacity: 0, y: 8 } : false}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       className="relative mt-2 mb-3 overflow-hidden rounded-2xl border border-line-strong bg-s2 p-3.5"
     >
       <div
         aria-hidden
-        className="pointer-events-none absolute -top-16 -right-10 h-40 w-40 rounded-full opacity-60 blur-3xl"
-        style={{ background: 'radial-gradient(circle, var(--accent) 0%, transparent 70%)' }}
+        className="pointer-events-none absolute -top-16 -right-10 h-40 w-40 rounded-full opacity-60"
+        style={{ background: 'radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent) 0%, transparent 70%)' }}
       />
       <h2 className="relative text-[14px] font-semibold tracking-[-0.01em]">Welcome to PromptVault 👋</h2>
       <p className="relative mt-0.5 text-[12.5px] text-muted">Your prompts, named and one click away. We added a few examples to get you started.</p>
@@ -316,8 +392,7 @@ function Onboarding() {
   );
 }
 
-function EmptyState({ query }: { query: string }) {
-  const view = useUI((s) => s.view);
+function EmptyState({ view, query }: { view: View; query: string }) {
   const folder = useVault((s) => (view.kind === 'folder' ? s.folders[view.id] : undefined));
   const newPrompt = (title?: string) =>
     useUI.getState().set({
@@ -359,18 +434,13 @@ function EmptyState({ query }: { query: string }) {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className="flex flex-col items-center px-6 pt-14 pb-8 text-center"
-    >
+    <div className="flex flex-col items-center px-6 pt-14 pb-8 text-center">
       <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-line bg-s2 text-muted shadow-card">
         {icon}
       </div>
       <h3 className="max-w-full truncate text-[13.5px] font-semibold">{title}</h3>
       <p className="mt-1 max-w-[260px] text-[12.5px] text-muted">{body}</p>
       <div className="mt-4">{action}</div>
-    </motion.div>
+    </div>
   );
 }

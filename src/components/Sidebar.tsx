@@ -64,7 +64,8 @@ export function Sidebar() {
         <span className="text-[13.5px] font-semibold tracking-[-0.01em]">PromptVault</span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      {/* layoutScroll: the selection indicator animates correctly even when this list is scrolled. */}
+      <motion.div layoutScroll className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         <div className="space-y-px">
           <NavRow icon={<Home size={15} />} label="Home" count={counts.all} active={sameView(view, { kind: 'home' })} onClick={() => go({ kind: 'home' })} />
           <NavRow
@@ -110,7 +111,7 @@ export function Sidebar() {
             ))}
           </ul>
         )}
-      </div>
+      </motion.div>
 
       <div className="shrink-0 border-t border-line p-2">
         <NavRow icon={<Settings size={15} />} label="Settings & data" onClick={() => useUI.getState().set({ settingsOpen: true })} />
@@ -138,14 +139,30 @@ function NavRow({
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       className={cx(
-        'flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12.5px] transition-colors duration-100',
+        'relative flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12.5px] transition-colors duration-100',
         active ? 'bg-s4 font-medium text-fg' : 'text-muted hover:bg-s3 hover:text-fg',
       )}
     >
+      {active && <SelectionBar color="var(--accent)" />}
       <span className={cx('flex w-4 justify-center', active && 'text-accent-strong')}>{icon}</span>
       <span className="flex-1 truncate">{label}</span>
       {count != null && count > 0 && <span className="text-[11px] tabular-nums text-subtle">{count}</span>}
     </button>
+  );
+}
+
+/**
+ * The accent bar marking the current view. One shared layoutId for nav rows and folders,
+ * so the bar slides from Home to a folder and back instead of blinking out and in.
+ */
+function SelectionBar({ color }: { color: string }) {
+  return (
+    <motion.span
+      layoutId="sidebar-selection"
+      className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full"
+      style={{ background: color }}
+      transition={{ type: 'spring', stiffness: 600, damping: 42 }}
+    />
   );
 }
 
@@ -210,14 +227,7 @@ const TreeNode = memo(function TreeNode({
           isOver && 'bg-accent-soft text-fg ring-2 ring-accent',
         )}
       >
-        {selected && (
-          <motion.span
-            layoutId="tree-indicator"
-            className="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-full"
-            style={{ background: color }}
-            transition={{ type: 'spring', stiffness: 600, damping: 40 }}
-          />
-        )}
+        {selected && <SelectionBar color={color} />}
         <button
           type="button"
           tabIndex={-1}

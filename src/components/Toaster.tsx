@@ -70,7 +70,7 @@ export function Toaster() {
             exit={{ opacity: 0, y: 6, scale: 0.98, transition: { duration: 0.12 } }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             role="status"
-            className="pointer-events-auto flex max-w-full items-center gap-2.5 rounded-full border border-line-strong bg-s3/95 py-1.5 pr-1.5 pl-2.5 text-[12.5px] font-medium text-fg shadow-pop backdrop-blur-md"
+            className="pointer-events-auto flex max-w-full items-center gap-2.5 rounded-full border border-line-strong bg-s3 py-1.5 pr-1.5 pl-2.5 text-[12.5px] font-medium text-fg shadow-pop"
           >
             {t.kind === 'success' && <DrawnCheck />}
             {t.kind === 'info' && <Info size={15} className="text-accent" />}

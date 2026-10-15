@@ -59,7 +59,7 @@ export function Peek() {
           transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
           style={style}
           aria-hidden
-          className="pointer-events-none fixed z-30 overflow-hidden rounded-xl border border-line-strong bg-s2/95 shadow-pop backdrop-blur-md"
+          className="pointer-events-none fixed z-30 overflow-hidden rounded-xl border border-line-strong bg-s2 shadow-pop"
         >
           <div
             className={cx(
