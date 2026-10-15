@@ -1,4 +1,4 @@
-import { memo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useDraggable } from '@dnd-kit/core';
 import { useSortable } from '@dnd-kit/sortable';
@@ -25,6 +25,7 @@ import { flattenTree } from '../lib/tree';
 import { useUI } from '../lib/ui';
 import { cx, FOLDER_COLORS, modKey, previewLine, relativeTime } from '../lib/utils';
 import {
+  afterMenuClose,
   IconButton,
   MenuContent,
   MenuItem,
@@ -162,6 +163,8 @@ const PromptCard = memo(function PromptCard({
   };
 
   const varCount = prompt.content.includes('{{') ? extractVars(prompt.content).length : 0;
+  // Tags are keys below; de-duplicate so older or hand-edited data can't produce duplicate keys.
+  const tags = useMemo(() => [...new Set(prompt.tags)], [prompt.tags]);
   const preview = previewLine(prompt.content).slice(0, 220);
 
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
@@ -249,12 +252,12 @@ const PromptCard = memo(function PromptCard({
 
       <div className="mt-1.5 flex min-w-0 items-center gap-2 text-[11px] text-subtle">
         {showFolder && <FolderChip folder={folder} />}
-        {prompt.tags.slice(0, 3).map((t) => (
+        {tags.slice(0, 3).map((t) => (
           <span key={t} className="truncate">
             #{t}
           </span>
         ))}
-        {prompt.tags.length > 3 && <span>+{prompt.tags.length - 3}</span>}
+        {tags.length > 3 && <span>+{tags.length - 3}</span>}
         <span className="flex-1" />
         {varCount > 0 && (
           <span className="flex shrink-0 items-center gap-0.5 text-accent-strong/80" title="Template variables">
@@ -303,7 +306,12 @@ const PromptCard = memo(function PromptCard({
           >
             <ChevronDown size={14} className={cx('transition-transform duration-200', expanded && 'rotate-180')} />
           </IconButton>
-          <CardMenu prompt={prompt} onOpenChange={setMenuOpen} />
+          <CardMenu
+            prompt={prompt}
+            // The toolbar holds the menu's anchor button, so it stays mounted until the menu's
+            // close animation has finished; unmounting earlier flings the menu to the corner.
+            onOpenChange={(o) => (o ? setMenuOpen(true) : afterMenuClose(() => setMenuOpen(false)))}
+          />
         </div>
       )}
     </div>
@@ -336,13 +344,13 @@ export function CardMenu({ prompt, onOpenChange }: { prompt: Prompt; onOpenChang
         <MenuItem icon={<CopyPlus size={14} />} onSelect={() => void duplicatePrompt(prompt)}>
           Duplicate
         </MenuItem>
-        <MenuItem icon={<Star size={14} />} onSelect={() => void toggleFavorite(prompt.id)}>
+        <MenuItem icon={<Star size={14} />} onSelect={() => afterMenuClose(() => void toggleFavorite(prompt.id))}>
           {prompt.favorite ? 'Unpin from favorites' : 'Pin to favorites'}
         </MenuItem>
         <MenuSub>
           <MenuSubTrigger icon={<FolderInput size={14} />}>Move to</MenuSubTrigger>
           <MenuSubContent>
-            <MenuItem icon={<Inbox size={13} />} onSelect={() => void movePrompt(prompt.id, null)}>
+            <MenuItem icon={<Inbox size={13} />} onSelect={() => afterMenuClose(() => void movePrompt(prompt.id, null))}>
               Unsorted
             </MenuItem>
             {flattenTree(folders).map(({ folder, depth }) => (
@@ -355,7 +363,7 @@ export function CardMenu({ prompt, onOpenChange }: { prompt: Prompt; onOpenChang
                     <span className="h-2 w-2 rounded-full" style={{ background: FOLDER_COLORS[folder.color] }} />
                   )
                 }
-                onSelect={() => void movePrompt(prompt.id, folder.id)}
+                onSelect={() => afterMenuClose(() => void movePrompt(prompt.id, folder.id))}
               >
                 <span style={{ paddingLeft: depth * 10 }}>
                   {folder.name}
@@ -366,7 +374,8 @@ export function CardMenu({ prompt, onOpenChange }: { prompt: Prompt; onOpenChang
           </MenuSubContent>
         </MenuSub>
         <MenuSeparator />
-        <MenuItem icon={<Trash2 size={14} />} danger onSelect={() => void deletePromptWithUndo(prompt)}>
+        {/* Delete / move / unpin can remove this card (the menu's anchor): run them after the menu closes. */}
+        <MenuItem icon={<Trash2 size={14} />} danger onSelect={() => afterMenuClose(() => void deletePromptWithUndo(prompt))}>
           Delete
         </MenuItem>
       </MenuContent>

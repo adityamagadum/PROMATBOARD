@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactNode } from 'react';
+import { memo, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useDroppable } from '@dnd-kit/core';
 import {
@@ -20,7 +20,7 @@ import { useVault } from '../lib/store';
 import { childrenOf, descendantIds } from '../lib/tree';
 import { useUI } from '../lib/ui';
 import { cx, FOLDER_COLORS } from '../lib/utils';
-import { IconButton, MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from './ui';
+import { afterMenuClose, IconButton, MenuContent, MenuItem, MenuRoot, MenuSeparator, MenuTrigger } from './ui';
 import { toast } from './Toaster';
 
 const sameView = (a: View, b: View) =>
@@ -76,17 +76,16 @@ export function Sidebar() {
             onClick={() => go({ kind: 'favorites' })}
           />
           <NavRow icon={<Clock size={15} />} label="Recently used" count={counts.recent} active={sameView(view, { kind: 'recent' })} onClick={() => go({ kind: 'recent' })} />
-          {(counts.unsorted > 0 || view.kind === 'unsorted') && (
-            <DropRow id="drop:unsorted">
-              <NavRow
-                icon={<Inbox size={15} />}
-                label="Unsorted"
-                count={counts.unsorted}
-                active={sameView(view, { kind: 'unsorted' })}
-                onClick={() => go({ kind: 'unsorted' })}
-              />
-            </DropRow>
-          )}
+          {/* Always shown: a row that appears when a folder is deleted would shift everything below. */}
+          <DropRow id="drop:unsorted">
+            <NavRow
+              icon={<Inbox size={15} />}
+              label="Unsorted"
+              count={counts.unsorted}
+              active={sameView(view, { kind: 'unsorted' })}
+              onClick={() => go({ kind: 'unsorted' })}
+            />
+          </DropRow>
         </div>
 
         <div className="mt-4 mb-1 flex items-center justify-between pr-1 pl-2">
@@ -105,10 +104,12 @@ export function Sidebar() {
             <FolderPlus size={14} /> Create your first folder
           </button>
         ) : (
-          <ul role="tree" aria-label="Folders" className="space-y-px">
-            {roots.map((f) => (
-              <TreeNode key={f.id} folder={f} depth={0} counts={counts.total} />
-            ))}
+          <ul role="tree" aria-label="Folders">
+            <AnimatePresence initial={false}>
+              {roots.map((f) => (
+                <TreeNode key={f.id} folder={f} depth={0} counts={counts.total} />
+              ))}
+            </AnimatePresence>
           </ul>
         )}
       </motion.div>
@@ -199,16 +200,31 @@ const TreeNode = memo(function TreeNode({
   const { setNodeRef, isOver } = useDroppable({ id: `drop:${folder.id}` });
   const color = FOLDER_COLORS[folder.color];
 
+  const [menuOpen, setMenuOpen] = useState(false);
+
   const toggle = () => void useVault.getState().setFolderCollapsed(folder.id, open);
 
-  const remove = async () => {
-    const undo = await useVault.getState().deleteFolder(folder.id);
-    if (selected) useUI.getState().setView({ kind: 'home' });
-    toast(`Deleted “${folder.name}”`, { kind: 'info', action: { label: 'Undo', run: () => void undo() } });
-  };
+  // Runs after the menu has closed (its anchor is this row). Leaving a deleted folder's view
+  // is handled centrally in App, which also covers deleting an ancestor of the open folder.
+  const remove = () =>
+    afterMenuClose(async () => {
+      if (!useVault.getState().folders[folder.id]) return; // already gone (e.g. deleted in another window)
+      const undo = await useVault.getState().deleteFolder(folder.id);
+      toast(`Deleted “${folder.name}”`, { kind: 'info', action: { label: 'Undo', run: () => void undo() } });
+    });
 
   return (
-    <li role="treeitem" aria-expanded={children.length ? open : undefined} aria-selected={selected}>
+    <motion.li
+      role="treeitem"
+      aria-expanded={children.length ? open : undefined}
+      aria-selected={selected}
+      // New and deleted folders grow/collapse in place instead of popping, so rows below glide.
+      initial={{ height: 0, opacity: 0, overflow: 'hidden' }}
+      animate={{ height: 'auto', opacity: 1, transitionEnd: { overflow: 'visible' } }}
+      exit={{ height: 0, opacity: 0, overflow: 'hidden' }}
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+      className="pb-px"
+    >
       <div
         ref={setNodeRef}
         style={{ paddingLeft: 4 + depth * 14 }}
@@ -249,13 +265,28 @@ const TreeNode = memo(function TreeNode({
           <FolderIcon size={14} className="shrink-0" style={{ color }} fill={color} fillOpacity={0.22} />
         )}
         <span className="min-w-0 flex-1 truncate">{folder.name}</span>
-        <span className="text-[11px] tabular-nums text-subtle group-hover:hidden group-focus-within:hidden">
-          {counts[folder.id] || ''}
-        </span>
-        <div className="hidden items-center group-hover:flex group-focus-within:flex" onClick={(e) => e.stopPropagation()}>
-          <MenuRoot modal={false}>
+        {/* Count and ⋯ share one fixed slot and cross-fade with opacity. The button must never
+            be display:none: it anchors the open menu, and a hidden anchor sends the menu to the
+            top-left corner of the window. */}
+        <div className="relative flex h-6 w-6 shrink-0 items-center justify-center" onClick={(e) => e.stopPropagation()}>
+          <span
+            className={cx(
+              'pointer-events-none text-[11px] tabular-nums text-subtle transition-opacity duration-100 group-hover:opacity-0 group-focus-within:opacity-0',
+              menuOpen && 'opacity-0',
+            )}
+          >
+            {counts[folder.id] || ''}
+          </span>
+          <MenuRoot modal={false} onOpenChange={setMenuOpen}>
             <MenuTrigger asChild>
-              <IconButton size="sm" label={`${folder.name} options`} className="h-6 w-6">
+              <IconButton
+                size="sm"
+                label={`${folder.name} options`}
+                className={cx(
+                  'absolute inset-0 !h-6 !w-6 opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100',
+                  menuOpen && 'bg-s4 text-fg opacity-100',
+                )}
+              >
                 <MoreHorizontal size={14} />
               </IconButton>
             </MenuTrigger>
@@ -273,7 +304,7 @@ const TreeNode = memo(function TreeNode({
                 Edit folder
               </MenuItem>
               <MenuSeparator />
-              <MenuItem icon={<Trash2 size={14} />} danger onSelect={() => void remove()}>
+              <MenuItem icon={<Trash2 size={14} />} danger onSelect={remove}>
                 Delete folder
               </MenuItem>
             </MenuContent>
@@ -285,18 +316,21 @@ const TreeNode = memo(function TreeNode({
         {open && children.length > 0 && (
           <motion.ul
             role="group"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
+            // overflow only hidden while animating, so drop-target rings on subfolders aren't clipped.
+            initial={{ height: 0, opacity: 0, overflow: 'hidden' }}
+            animate={{ height: 'auto', opacity: 1, transitionEnd: { overflow: 'visible' } }}
+            exit={{ height: 0, opacity: 0, overflow: 'hidden' }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="space-y-px overflow-hidden pt-px"
+            className="pt-px"
           >
-            {children.map((c) => (
-              <TreeNode key={c.id} folder={c} depth={depth + 1} counts={counts} />
-            ))}
+            <AnimatePresence initial={false}>
+              {children.map((c) => (
+                <TreeNode key={c.id} folder={c} depth={depth + 1} counts={counts} />
+              ))}
+            </AnimatePresence>
           </motion.ul>
         )}
       </AnimatePresence>
-    </li>
+    </motion.li>
   );
 });

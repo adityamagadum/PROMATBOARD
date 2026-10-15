@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { create } from 'zustand';
 import type { Prompt } from '../types';
+import { useVault } from '../lib/store';
 import { useUI } from '../lib/ui';
 import { cx } from '../lib/utils';
 import { RichContent } from './PromptCard';
@@ -23,6 +24,8 @@ export function schedulePeek(prompt: Prompt, el: HTMLElement) {
   timer = window.setTimeout(() => {
     const ui = useUI.getState();
     if (ui.draggingId || ui.expanded[prompt.id] || !el.isConnected || !el.matches(':hover')) return;
+    // Never float over an open menu or dialog.
+    if (document.querySelector('[role="menu"], [role="dialog"]')) return;
     usePeek.setState({ prompt, rect: el.getBoundingClientRect() });
   }, HOVER_INTENT_MS);
 }
@@ -33,7 +36,9 @@ export function hidePeek() {
 }
 
 export function Peek() {
-  const { prompt, rect } = usePeek();
+  const { prompt: peeked, rect } = usePeek();
+  // Read the live record: shows edits, and disappears if the prompt is deleted meanwhile.
+  const prompt = useVault((s) => (peeked ? s.prompts[peeked.id] : undefined));
   const vh = window.innerHeight;
   const vw = window.innerWidth;
   let style: React.CSSProperties = {};

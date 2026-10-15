@@ -19,7 +19,16 @@ export function Tip({
 }) {
   return (
     <Tooltip.Root>
-      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+      <Tooltip.Trigger
+        asChild
+        // Only keyboard focus opens a tooltip. Without this, focus returning to a button after a
+        // menu or dialog closes pops a stray tooltip (e.g. "New prompt" after every save).
+        onFocus={(e) => {
+          if (!e.currentTarget.matches(':focus-visible')) e.preventDefault();
+        }}
+      >
+        {children}
+      </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
           side={side}
@@ -175,6 +184,16 @@ export function Sheet({
 }
 
 /* ---------------- Dropdown menu ---------------- */
+
+/** Duration of the menu close animation (`.anim-pop[data-state=closed]` in index.css). */
+export const MENU_EXIT_MS = 110;
+
+/**
+ * Runs an action once the menu has finished closing. Use it for actions that remove or move
+ * the element the menu is anchored to (delete, move, unpin): if the anchor disappears while the
+ * menu is still animating out, the menu is re-positioned to the top-left corner for a frame.
+ */
+export const afterMenuClose = (fn: () => void) => window.setTimeout(fn, MENU_EXIT_MS);
 export const MenuRoot = Menu.Root;
 export const MenuTrigger = Menu.Trigger;
 

@@ -54,6 +54,7 @@ export async function deliver(prompt: Prompt, text: string, mode: 'copy' | 'inse
 }
 
 export async function deletePromptWithUndo(prompt: Prompt) {
+  if (!useVault.getState().prompts[prompt.id]) return; // already gone
   const undo = await useVault.getState().deletePrompt(prompt.id);
   toast(`Deleted “${prompt.title}”`, { kind: 'info', action: { label: 'Undo', run: () => void undo() } });
 }

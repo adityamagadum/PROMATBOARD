@@ -30,6 +30,9 @@ const ANIMATE_LIMIT = 80;
 /** Rows rendered per page; more are mounted as you scroll or arrow down. */
 const PAGE = 24;
 
+const EASE_OUT = [0.22, 1, 0.36, 1] as const;
+const LAYOUT_SPRING = { type: 'spring', stiffness: 520, damping: 40 } as const;
+
 const byOrder = (a: Prompt, b: Prompt) => a.order - b.order || a.createdAt - b.createdAt;
 const toEntries = (section: string, prompts: Prompt[]): Entry[] =>
   prompts.map((p) => ({ key: `${section}:${p.id}`, prompt: p, section }));
@@ -179,6 +182,8 @@ export function PromptList() {
   }, [viewKey, searchKey]);
 
   const onScroll = () => {
+    // The peek is positioned from where its card was; once the list moves it would float loose.
+    hidePeek();
     const el = scrollRef.current;
     if (el && viewKey !== 'search') memory.set(viewKey, { top: el.scrollTop, limit });
     maybeLoadMore();
@@ -230,57 +235,80 @@ export function PromptList() {
         animate={{ opacity: 1 }}
         transition={{ duration: 0.14, ease: 'easeOut' }}
       >
-        {showOnboarding && <Onboarding />}
+        <AnimatePresence initial={false}>{showOnboarding && <Onboarding key="onboarding" />}</AnimatePresence>
 
         {total === 0 && !showOnboarding && <EmptyState view={view} query={query} />}
 
-        {visibleSections.map((section) =>
-          section.entries.length === 0 ? null : (
-            <section key={section.id} className="mb-3" aria-label={section.label}>
-              {section.label && (
-                <h2 className="section-label sticky top-0 z-[2] -mx-3 mb-1 bg-bg px-4 pt-2 pb-1.5">{section.label}</h2>
-              )}
-              {section.layout === 'tiles' ? (
-                <div className="grid grid-cols-2 gap-1.5">
-                  {section.entries.map((e) => (
-                    <PromptTile
-                      key={e.key}
-                      entryKey={e.key}
-                      prompt={e.prompt}
-                      folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
-                      active={activeKey === e.key}
-                    />
-                  ))}
-                  {!!section.more && (
-                    <button
-                      type="button"
-                      onClick={() => useUI.getState().setView({ kind: 'favorites' })}
-                      className="col-span-2 rounded-lg py-1 text-[11.5px] font-medium text-subtle transition-colors hover:bg-s3 hover:text-fg"
-                    >
-                      View all {section.entries.length + section.more} favorites →
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <CardStack ids={section.ids} sortable={!!section.sortable}>
-                  <AnimatePresence initial={false} mode="popLayout">
-                    {section.entries.map((e) => (
-                      <Row
-                        key={e.key}
-                        entry={e}
-                        sortable={!!section.sortable}
-                        folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
-                        showFolder={!(section.id === 'folder' || section.id.startsWith('sub-'))}
-                        active={activeKey === e.key}
-                        animate={animateItems}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </CardStack>
-              )}
-            </section>
-          ),
-        )}
+        {/* Sections (e.g. Pinned, Recently used) fade in/out as they appear, and the ones below
+            glide to their new place instead of jumping. */}
+        <AnimatePresence initial={false}>
+          {visibleSections
+            .filter((section) => section.entries.length > 0)
+            .map((section) => (
+              <motion.section
+                key={section.id}
+                layout={animateItems ? 'position' : false}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, transition: { duration: 0.12 } }}
+                transition={{ duration: 0.18, ease: EASE_OUT, layout: LAYOUT_SPRING }}
+                className="mb-3"
+                aria-label={section.label}
+              >
+                {section.label && (
+                  <h2 className="section-label sticky top-0 z-[2] -mx-3 mb-1 bg-bg px-4 pt-2 pb-1.5">{section.label}</h2>
+                )}
+                {section.layout === 'tiles' ? (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <AnimatePresence initial={false}>
+                      {section.entries.map((e) => (
+                        <motion.div
+                          key={e.key}
+                          layout={animateItems ? 'position' : false}
+                          initial={{ opacity: 0, scale: 0.96 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.12 } }}
+                          transition={{ duration: 0.18, ease: EASE_OUT, layout: LAYOUT_SPRING }}
+                        >
+                          <PromptTile
+                            entryKey={e.key}
+                            prompt={e.prompt}
+                            folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
+                            active={activeKey === e.key}
+                          />
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                    {!!section.more && (
+                      <button
+                        type="button"
+                        onClick={() => useUI.getState().setView({ kind: 'favorites' })}
+                        className="col-span-2 rounded-lg py-1 text-[11.5px] font-medium text-subtle transition-colors hover:bg-s3 hover:text-fg"
+                      >
+                        View all {section.entries.length + section.more} favorites →
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <CardStack ids={section.ids} sortable={!!section.sortable}>
+                    <AnimatePresence initial={false} mode="popLayout">
+                      {section.entries.map((e) => (
+                        <Row
+                          key={e.key}
+                          entry={e}
+                          sortable={!!section.sortable}
+                          folder={e.prompt.folderId ? folders[e.prompt.folderId] : undefined}
+                          showFolder={!(section.id === 'folder' || section.id.startsWith('sub-'))}
+                          active={activeKey === e.key}
+                          animate={animateItems}
+                        />
+                      ))}
+                    </AnimatePresence>
+                  </CardStack>
+                )}
+              </motion.section>
+            ))}
+        </AnimatePresence>
         {truncated && <div className="flex h-10 items-center justify-center text-[11px] text-subtle">Loading more…</div>}
       </motion.div>
     </motion.div>
@@ -322,7 +350,7 @@ const Row = memo(
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.12 } }}
-        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1], layout: { type: 'spring', stiffness: 520, damping: 40 } }}
+        transition={{ duration: 0.18, ease: EASE_OUT, layout: LAYOUT_SPRING }}
       >
         {card}
       </motion.div>
@@ -358,6 +386,8 @@ function Onboarding() {
     <motion.div
       initial={animateIn ? { opacity: 0, y: 8 } : false}
       animate={{ opacity: 1, y: 0 }}
+      // Dismissing collapses the card so the list slides up instead of jumping.
+      exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0, borderWidth: 0 }}
       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       className="relative mt-2 mb-3 overflow-hidden rounded-2xl border border-line-strong bg-s2 p-3.5"
     >

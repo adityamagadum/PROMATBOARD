@@ -90,6 +90,7 @@ export function App() {
   }, []);
 
   useKeyboard();
+  useLeaveDeletedFolder();
 
   if (!ready) return null;
 
@@ -490,6 +491,23 @@ function DnD({ docked, children }: { docked: boolean; children: React.ReactNode 
       </DragOverlay>
     </DndContext>
   );
+}
+
+/**
+ * If the open folder disappears (deleted here, deleted as part of a parent, or deleted in
+ * another PromptVault window), fall back to Home. Unlike setView, this leaves the drawer as is,
+ * so deleting folders from the drawer doesn't slam it shut.
+ */
+function useLeaveDeletedFolder() {
+  const ready = useVault((s) => s.ready);
+  const missing = useVault((s) => {
+    const v = useUI.getState().view;
+    return v.kind === 'folder' && !s.folders[v.id];
+  });
+  const viewMissing = useUI((s) => s.view.kind === 'folder' && !useVault.getState().folders[s.view.id]);
+  useEffect(() => {
+    if (ready && (missing || viewMissing)) useUI.getState().set({ view: { kind: 'home' }, activeKey: null });
+  }, [ready, missing, viewMissing]);
 }
 
 /* ---------------- Global keyboard ---------------- */
