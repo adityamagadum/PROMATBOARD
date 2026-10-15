@@ -1,0 +1,42 @@
+// Renders the PromptVault icon (an SVG) into the PNG sizes Chrome needs.
+// Usage: npm run icons
+import sharp from 'sharp';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+const out = fileURLToPath(new URL('../public/icons/', import.meta.url));
+
+// Two stacked "prompt cards" on a violet gradient tile with a small spark.
+const svg = (size) => `
+<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9D8BFF"/>
+      <stop offset="1" stop-color="#5B3FE6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".28"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#bg)"/>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="url(#shine)"/>
+  <rect x="34" y="26" width="58" height="66" rx="12" fill="#fff" fill-opacity=".38"/>
+  <rect x="26" y="38" width="64" height="66" rx="13" fill="#fff"/>
+  <rect x="38" y="54" width="34" height="8" rx="4" fill="#5B3FE6"/>
+  <rect x="38" y="70" width="40" height="6" rx="3" fill="#5B3FE6" fill-opacity=".35"/>
+  <rect x="38" y="82" width="26" height="6" rx="3" fill="#5B3FE6" fill-opacity=".35"/>
+  <path d="M100 16 l4.5 10.5 L115 31 l-10.5 4.5 L100 46 l-4.5-10.5 L85 31 l10.5-4.5z" fill="#fff"/>
+</svg>`;
+
+await mkdir(out, { recursive: true });
+for (const size of [16, 32, 48, 128]) {
+  // Render at 4x then downsample for crisp small sizes.
+  const png = await sharp(Buffer.from(svg(size * 4)))
+    .resize(size, size)
+    .png()
+    .toBuffer();
+  await writeFile(`${out}icon-${size}.png`, png);
+}
+await writeFile(`${out}icon.svg`, svg(128).trim());
+console.log('Icons written to public/icons');
